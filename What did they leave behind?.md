@@ -37,3 +37,13 @@ The full sequence in the first 11 minutes paints the entire BEC playbook:
 <img width="851" height="375" alt="image" src="https://github.com/user-attachments/assets/e2e87a68-4fa0-4fb2-b4c1-992f48ad661b" />
 
 > **Lesson:** `CloudAppEvents` is where post-auth O365 activity lives — mailbox reads, rule creation, file access, sends. When `SigninLogs` runs out, this is the next pivot. Also worth noting: `AccountDisplayName` shows `Mark Smith` for control-plane actions (PowerShell, rule creation) but a session GUID for data-plane operations like `MailItemsAccessed`. Same actor, different log shape.
+
+## Q10 — Rule Creation Method
+
+**Goal:** Identify the `ActionType` Azure logs when an inbox rule is created.
+
+**Approach:** Already visible in the Q09 results — at `10:02:33 PM` and `10:03:59 PM`, the attacker triggered an `ActionType` of `New-InboxRule`. That's the underlying PowerShell cmdlet name, which O365 logs verbatim whether the rule was created via Outlook UI, OWA, or direct Exchange Online PowerShell. No new query needed.
+
+**Flag:** `New-InboxRule`
+
+> **Lesson:** Inbox rules are a top-tier BEC persistence mechanism — silent, durable, and rarely audited by users. Detection engineering tip: alert on any `New-InboxRule` event where the rule body contains keywords like `delete`, `move to RSS`, or external forward addresses. That signature catches BEC persistence with very low false positive rates.
