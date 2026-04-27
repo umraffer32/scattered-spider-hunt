@@ -118,3 +118,49 @@ The same user action — "the attacker accessed SharePoint" — produces:
 Microsoft's identity stack and its workload stack do not share a naming convention. The same service shows up under different strings depending on which lens you're querying through.
 
 > **Lesson:** Never trust a single log table to authoritatively name "what app was accessed." Cross-reference at minimum `SigninLogs` (auth layer) and `CloudAppEvents` (data layer). When scoping containment — disabling apps, auditing data access — the **workload-layer name** is what matters, because that's what your tenant administration tools and DLP policies key off of. When hunting authentication anomalies — token theft, unusual OAuth grants — the **identity-layer name** matters, because that's where the auth flow is logged. Same incident, two lenses, two vocabularies. Pick the lens that matches the question being asked, not the one the instructions point you at.
+
+## Q23 — Session Correlation
+
+**Goal:** Identify the single session ID that ties every attacker action together — sign-in, mailbox access, rule creation, fraudulent send, and file browsing.
+
+**Approach:** Two queries — one to extract the session ID from the inbox rule's `RawEventData`, one to confirm it matches the successful sign-in. If both return the same GUID, the entire attack chain is provably one continuous session.
+
+### Step 1 — Pull the SessionId from the inbox rule events
+
+The session ID is buried inside `RawEventData` under `AppAccessContext.AADSessionId`. Parse the JSON and project it:
+
+```kql
+CloudAppEvents
+| where Timestamp between (datetime(2026-02-25 21:00:00) .. datetime(2026-02-26 00:00:00))
+| where IPAddress == "205.147.16.190"
+| where ActionType == "New-InboxRule"
+| extend SessionId = tostring(parse_json(RawEventData).AppAccessContext.AADSessionId)
+| project Timestamp, SessionId
+```
+
+Both rule events returned the same session: `00225cfa-a0ff-fb46-a079-5d152fcdf72a`.
+
+<img width="559" height="155" alt="image" src="https://github.com/user-attachments/assets/a30a0c7b-8fa2-4472-ab16-eccbb404d833" />
+
+
+### Step 2 — Confirm it matches the successful sign-in
+
+`SigninLogs` exposes `SessionId` directly as a column, no JSON parsing needed:
+
+```kql
+SigninLogs
+| where TimeGenerated between (datetime(2026-02-25 21:00:00) .. datetime(2026-02-26 00:00:00))
+| where IPAddress == "205.147.16.190"
+| where ResultType == 0
+| project TimeGenerated, SessionId
+| distinct SessionId
+```
+
+Same GUID. The successful authentication at `9:59:52 PM`, the mailbox reads, both inbox rules, the fraudulent send to Reynolds, and the SharePoint/OneDrive browsing — all share `00225cfa-a0ff-fb46-a079-5d152fcdf72a`.
+<br>
+<img width="322" height="113" alt="image" src="https://github.com/user-attachments/assets/3ae836ad-71bb-42b7-bfc8-18f8baca754e" />
+
+
+**Flag:** `00225cfa-a0ff-fb46-a079-5d152fcdf72a`
+
+> **Lesson:** `AADSessionId` is the most powerful pivot in any Azure AD-based incident. From a single GUID you can pull every authentication event, every mailbox operation, every file access, every admin action — all provably tied to one token. In real-world IR this matters for two reasons. **For containment**, revoking the session (via `Revoke-AzureADUserAllRefreshToken` or the Conditional Access "sign-in risk" trigger) instantly kills every downstream operation. **For attribution and legal**, the session ID is what lets you say "all of these actions were the same actor in the same authenticated context" — not separate incidents that happened to share an IP. When writing IR reports, lead with the session ID; everything else hangs off it.
