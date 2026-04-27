@@ -28,3 +28,93 @@ A `FileAccessed` event landed at `10:07:16 PM` — under a minute after the frau
 **Flag:** `Microsoft OneDrive for Business`
 
 > **Lesson:** BEC investigations frequently stop at "the fake invoice was sent" — but a session with valid credentials usually does more than one thing. The attacker had `9:59 PM` to whenever the session expired, and they used it to browse OneDrive looking for more material. In real-world response, you scope BEC by listing every cloud app touched during the attacker's session window: Exchange, SharePoint, OneDrive, Teams, Power Platform. Each one extends the breach surface and adds to the regulatory disclosure picture.
+
+## Q22 — SharePoint App Accessed
+
+**Goal:** Identify the SharePoint application the attacker authenticated to.
+
+**Approach:** This question burned five wrong submissions before landing the flag, and the lesson learned is more valuable than the flag itself. The challenge instructions said *"Query SigninLogs for the attacker's IP"* — but the platform's flag checker was looking for a value that lives in `CloudAppEvents`, not `SigninLogs`. Two tables, two naming conventions for the same activity.
+
+### Step 1 — Follow the instructions (wrong table)
+
+The question pointed at `SigninLogs`, so the first query mirrored the Q06 approach:
+
+```kql
+SigninLogs
+| where TimeGenerated between (datetime(2026-02-25 21:00:00) .. datetime(2026-02-26 00:00:00))
+| where UserPrincipalName == "m.smith@lognpacific.org"
+| where IPAddress == "205.147.16.190"
+| where ResultType == 0
+| distinct AppDisplayName
+```
+
+Four candidates returned: `One Outlook Web`, `Office 365 SharePoint Online`, `SharePoint Online Web Client Extensibility`, `OfficeHome`. With Q06 already claiming `One Outlook Web`, the obvious next pick was **`Office 365 SharePoint Online`**. **Rejected.**
+
+<img width="440" height="199" alt="image" src="https://github.com/user-attachments/assets/8b8295e3-c743-4f1e-abe5-ff460d97a73c" />
+
+
+### Step 2 — Try the other SharePoint candidate
+
+The 35-point hint confirmed *"The application name contains SharePoint. Submit the full application display name as shown in the logs."* That should have made **`SharePoint Online Web Client Extensibility`** correct. **Rejected.**
+
+### Step 3 — Try OfficeHome
+
+With both SharePoint candidates burned, the only remaining `AppDisplayName` worth attempting was **`OfficeHome`**. **Rejected.**
+
+### Step 4 — Pivot to `ResourceDisplayName`
+
+At this point all the SigninLogs `AppDisplayName` values were exhausted (with `One Outlook Web` already taken by Q06). Pulled in the `ResourceDisplayName` column to see if the answer lived in a related field:
+
+```kql
+SigninLogs
+| where TimeGenerated between (datetime(2026-02-25 21:00:00) .. datetime(2026-02-26 00:00:00))
+| where IPAddress == "205.147.16.190"
+| where ResultType == 0
+| distinct AppDisplayName, ResourceDisplayName
+```
+
+This surfaced **`Office 365 Exchange Online`** as the resource backing the Outlook session — a value that hadn't appeared in any earlier query. **Rejected.**
+
+<img width="537" height="196" alt="image" src="https://github.com/user-attachments/assets/0ac0a3b1-0341-4d79-a3d5-da091f109769" />
+
+
+### Step 5 — One last guess from frustration
+
+With every reasonable candidate burned and the SharePoint hint contradicting every SharePoint-related submission, **`One Outlook Web`** went in as a frustration shot. **Rejected.**
+
+### Step 6 — Pivot to `CloudAppEvents`
+
+The breakthrough came from re-reading Q21's answer pattern: `Microsoft OneDrive for Business`. That string never appeared in `SigninLogs` at all — it only existed in `CloudAppEvents.Application`. If Q21's flag came from there, Q22's might too, regardless of what the question text said.
+
+```kql
+CloudAppEvents
+| where Timestamp between (datetime(2026-02-25 21:00:00) .. datetime(2026-02-26 00:00:00))
+| where IPAddress == "205.147.16.190"
+| distinct Application
+```
+
+Three values came back:
+- `Microsoft Exchange Online`
+- `Microsoft OneDrive for Business`
+- **`Microsoft SharePoint Online`** ← never seen in `SigninLogs`
+
+<img width="382" height="177" alt="image" src="https://github.com/user-attachments/assets/ad57d75c-144b-48be-96b5-7ae172c92424" />
+
+
+That was the flag.
+
+**Flag:** `Microsoft SharePoint Online`
+
+### The Real Lesson — Two Tables, Two Naming Conventions
+
+`SigninLogs` is an **identity** table. Each row describes an *authentication event* — the auth surface the user logged into. Its `AppDisplayName` field uses values like `One Outlook Web` (the OWA login flow), `OfficeHome` (the office.com portal), `SharePoint Online Web Client Extensibility` (a background OAuth token grant). These are *auth client names*.
+
+`CloudAppEvents` is an **activity** table. Each row describes *something a user did inside a cloud workload*. Its `Application` field uses values like `Microsoft Exchange Online`, `Microsoft OneDrive for Business`, `Microsoft SharePoint Online`. These are *workload product names*.
+
+The same user action — "the attacker accessed SharePoint" — produces:
+- A `SigninLogs` row with `AppDisplayName = SharePoint Online Web Client Extensibility` (or `Office 365 SharePoint Online`, depending on the auth flow)
+- A `CloudAppEvents` row with `Application = Microsoft SharePoint Online`
+
+Microsoft's identity stack and its workload stack do not share a naming convention. The same service shows up under different strings depending on which lens you're querying through.
+
+> **Lesson:** Never trust a single log table to authoritatively name "what app was accessed." Cross-reference at minimum `SigninLogs` (auth layer) and `CloudAppEvents` (data layer). When scoping containment — disabling apps, auditing data access — the **workload-layer name** is what matters, because that's what your tenant administration tools and DLP policies key off of. When hunting authentication anomalies — token theft, unusual OAuth grants — the **identity-layer name** matters, because that's where the auth flow is logged. Same incident, two lenses, two vocabularies. Pick the lens that matches the question being asked, not the one the instructions point you at.
