@@ -145,3 +145,12 @@ The two rules work as a system. Rule one silently exfiltrates anything finance-r
 
 > **Lesson:** Keyword lists are a window into attacker intent. `invoice, payment, wire, transfer` is unambiguous BEC — they want financial threads. Other keyword sets to watch for in the wild: credential phishing rules tend to filter on `password, reset, login, MFA`; data theft rules on `confidential, NDA, contract, M&A`. If you see an inbox rule whose `SubjectOrBodyContainsWords` reads like a category instead of a topic, that's the rule moving the data.
 
+## Q14 — Rule Processing Flag
+
+**Goal:** Identify the rule parameter that prevents any subsequent rules from processing the matched emails.
+
+**Approach:** Already visible from the Q11 investigation. The forward rule's Parameters array included `StopProcessingRules: True`. When set, Exchange halts rule evaluation as soon as this rule matches — no other inbox rules see the email afterward. That means even if Mark had his own rules (a "flag suspicious emails" filter, for example), they'd never fire on anything matching the attacker's keyword list.
+
+**Flag:** `StopProcessingRules`
+
+> **Lesson:** `StopProcessingRules: True` combined with `DeleteMessage: True` or `ForwardTo` on a rule the user didn't create is a near-certain BEC signature. Threat hunters can flag this combination directly: any rule containing both flags, created by a session not matching the user's normal IP/device pattern, deserves a deep look. This single combination of parameters is what makes inbox-rule-based BEC so resilient — the attacker's logic always wins, the user's safety nets never trigger.
