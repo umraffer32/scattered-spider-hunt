@@ -163,3 +163,43 @@ The first successful sign-in at 21:59:52 lands on **One Outlook Web** — the at
 **Flag:** `One Outlook Web`
 
 <img width="1555" height="296" alt="image" src="https://github.com/user-attachments/assets/036e72bf-6ca8-464d-8866-7875e193048f" />
+
+## Q07 — Attacker Operating System
+
+**Goal:** Identify the OS the attacker used.
+
+**Approach:** Azure AD parses device info into the `DeviceDetail` JSON field on every sign-in. Pull it from the successful auth event and look at the `operatingSystem` property.
+
+```kql
+SigninLogs
+| where TimeGenerated between (datetime(2026-02-25 21:00:00) .. datetime(2026-02-26 00:00:00))
+| where UserPrincipalName == "m.smith@lognpacific.org"
+| where IPAddress == "205.147.16.190"
+| where ResultType == 0
+| project TimeGenerated, DeviceDetail
+| take 1
+```
+
+`DeviceDetail` returns:
+```json
+{"deviceId":"","operatingSystem":"Linux","browser":"Firefox 147.0","isCompliant":false,"isManaged":false}
+```
+
+Mark is a finance user who normally signs in from corporate Windows or Mac endpoints. A Linux session — combined with `isManaged: false` (not a corporate device) — is a strong anomaly indicator on its own, even before the IP and country are factored in.
+
+**Flag:** `Linux`
+
+<img width="933" height="176" alt="image" src="https://github.com/user-attachments/assets/cc8571a2-a79d-4699-a01d-9515dd6d9df1" />
+
+## Q08 — Attacker Browser
+
+**Goal:** Identify the browser used (in the format Azure logs it).
+
+**Approach:** Already visible in the `DeviceDetail` JSON pulled for Q07 — the `browser` property reads `Firefox 147.0`.
+
+The trap on this one was *format*. The `UserAgent` field on the same event shows `Firefox/147.0` (with a slash, classic UA string format). The challenge specifically pointed to `DeviceDetail`, where Azure normalizes it as `Firefox 147.0` (with a space). Submitting the slash version was rejected.
+
+**Flag:** `Firefox 147.0`
+
+> **Lesson:** When a hint points to a specific field, use that field exactly. The same data gets normalized differently depending on where Azure stores it.
+
