@@ -1,4 +1,4 @@
-# PRACTICEHunt 02 — Scattered Spider BEC Investigation
+# Hunt 02 — Scattered Spider BEC Investigation
 
 A KQL-driven incident response investigation into a Business Email Compromise (BEC) attack on **LogN Pacific Financial Services**. The attacker hijacked a finance department user's account via MFA fatigue, established email rule persistence, and redirected **£24,500** in fraudulent wire transfers before being detected.
 
